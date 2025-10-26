@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Escáner QR</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+<img src="{{ url_for('static', filename='Gategroup_logo.svg.png') }}" width="200" height="70" alt="Logo" style="display: block; margin: -20px;">
+
+<style>
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-family: Arial;
+    background: hsl(0, 0%, 7%);
+  }
+  #scanner-container {
+    width: 320px;
+    height: 240px;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 35px;
+    border-radius: 15px;
+    overflow: hidden;
+    border: 2px solid #654f18;
+  }
+  #info {
+    margin-top: 20px;
+    padding: 20px;
+    background: #091a41;
+    border-radius: 15px;
+    width: 340px;
+    text-align: left;
+    color: #ffffff;
+  }
+  #info h3 {
+    text-align: center;
+    color: #ffffff;
+    margin: 0 0 10px;
+  }
+  .dato {
+    background: #ffffff;
+    border-radius: 10px;
+    padding: 8px;
+    margin: 5px 0;
+    color: #000;
+  }
+  #verificar {
+    display: block;
+    margin: 12px auto 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: none;
+    background: #745f2b;
+    color: #fff;
+    cursor: pointer;
+  }
+  #vuelo_select {
+    width: 100%;
+    padding: 10px;
+    border-radius: 10px;
+    border: none;
+    margin-bottom: 10px;
+    background: #ffffff;
+    color: #000000;
+    cursor: pointer;
+  }
+  #mensaje {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 10px;
+    font-weight: bold;
+    text-align: center;
+    transition: all 0.3s ease;
+  }
+  .ok { background: #1b5e20; color: #b9ffb5; border: 1px solid #4caf50; }
+  .error { background: #b71c1c; color: #ffb5b5; border: 1px solid #ef5350; }
+  .flight_error { background: #8e24aa; color: #f3e5f5; border: 1px solid #ab47bc; }
+  .full { background: #ff6f00; color: #fff3e0; border: 1px solid #ffa000; }
+  .waiting { background: #263238; color: #b0bec5; border: 1px solid #546e7a; }
+</style>
+</head>
+<body>
+
+<div id="scanner-container">
+  <img src="/video_feed" width="320" height="240" alt="Video feed">
+</div>
+
+<div id="info">
+  <h3>Escáner QR</h3>
+
+  <select id="vuelo_select">
+    <option value="">Selecciona un vuelo</option>
+  </select>
+
+  <div id="qr_data"></div>
+  <div id="mensaje" class="waiting">Esperando QR...</div>
+  <button id="verificar">Limpiar</button>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  let lastQR = null;
+  let vueloActual = null;
+  const qrDiv = document.getElementById("qr_data");
+  const verificarBtn = document.getElementById("verificar");
+  const mensajeDiv = document.getElementById("mensaje");
+  const vueloSelect = document.getElementById("vuelo_select");
+
+  // 🔹 Cargar vuelos
+  async function cargarVuelos() {
+    try {
+      const res = await fetch("/vuelos_disponibles");
+      const data = await res.json();
+      vueloSelect.innerHTML = `<option value="">Selecciona un vuelo</Cargando...></option>`;
+      data.vuelos.forEach(v => {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        vueloSelect.appendChild(opt);
+      });
+    } catch (err) {
+      console.error("Error cargando vuelos:", err);
+    }
+  }
+
+  // 🔹 Seleccionar vuelo actual
+  vueloSelect.addEventListener("change", async () => {
+    const vuelo = vueloSelect.value;
+    if (!vuelo) return;
+    vueloActual = vuelo;
+    const res = await fetch(`/seleccionar_vuelo?vuelo=${vuelo}`);
+    const data = await res.json();
+    mensajeDiv.textContent = data.message || "Vuelo seleccionado";
+    mensajeDiv.className = "ok"; 
+  });
+
+  // 🔹 Limpiar pantalla
+  verificarBtn.addEventListener("click", async () => {
+    await fetch("/ultimo_qr?clear=true");
+    lastQR = null;
+    qrDiv.innerHTML = "";
+    mensajeDiv.textContent = "Esperando QR...";
+    mensajeDiv.className = "waiting";
+  });
+
+  // 🔹 Escapar HTML
+  function safeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (m) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[m]));
+  }
+
+  // 🔹 Actualizar QR
+  async function actualizarQR() {
+    try {
+      const res = await fetch("/ultimo_qr", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      
+      if (data.vuelo_actual && data.vuelo_actual.toUpperCase() !== vueloActual) {
+        vueloActual = data.vuelo_actual.toUpperCase();
+        vueloSelect.value = vueloActual;
+      }
+      
+      if (!data.qr_data) {
+        if (data.status === 'waiting') {
+          mensajeDiv.textContent = data.message || "Esperando QR...";
+          mensajeDiv.className = "waiting";
+        }
+        return;
+      }
+
+      const qrObj = data.qr_data;
+      const vueloQR = qrObj.flight_number || qrObj.flight || qrObj.flight_id || qrObj.vuelo || null;
+      const qrKey = JSON.stringify(qrObj) + data.current; 
+
+      if (qrKey === lastQR && mensajeDiv.textContent === data.message) return;
+      lastQR = qrKey;
+
+      qrDiv.innerHTML = `
+        <p class="dato"><i class="fa-solid fa-box"></i> <b>Drawer ID:</b> ${safeHtml(data.drawer || qrObj.drawer_id || "")}</p>
+        <p class="dato"><i class="fa-solid fa-cubes"></i> <b>Total en Drawer:</b> ${safeHtml(data.current)}/${safeHtml(data.capacity)}</p>
+        <p class="dato"><i class="fa-solid fa-user-tie"></i> <b>Cliente:</b> ${safeHtml(qrObj.customer_name || "N/A")}</p>
+        <p class="dato"><i class="fa-solid fa-calendar"></i> <b>Caducidad:</b> ${safeHtml(qrObj.expiry_date || "N/A")}</p>
+        <p class="dato"><i class="fa-solid fa-plane"></i> <b>Vuelo QR:</b> ${safeHtml(vueloQR || "N/A")}</p>
+      `;
+
+      mensajeDiv.textContent = data.message || "Esperando QR...";
+      mensajeDiv.className = data.status || "waiting";
+
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  cargarVuelos();
+  setInterval(actualizarQR, 1500);
+});
+</script>
+</body>
+</html>
+
